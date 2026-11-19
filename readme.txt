@@ -25,6 +25,7 @@ Enabling / Disabling Mods
 Notes
 
 The first time you save a mod's parameters, the tool automatically backs up its cfg (.cfg.bak). Click Restore from Backup in the parameter window to roll back to the state before your first edit at any time.
+Hotkey conflicts are checked when you save: if a key you just set is already bound by another mod, or by another parameter of the same mod, a dialog lists the conflicting entries and asks whether to save anyway. Only plugins currently installed in BepInEx/plugins are counted, so leftover configs from removed mods do not trigger false warnings.
 If multiple cfg files are detected for the same mod (usually because an old config wasn't deleted after a mod update), a warning appears at the top of the parameter window and the newest file is edited by default. If your changes don't take effect, delete the leftover old cfg as prompted.
 
 UI Language

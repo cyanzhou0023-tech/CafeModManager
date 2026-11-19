@@ -12,6 +12,11 @@ with one click, and gives you a GUI editor for their `.cfg` parameters.
   nothing is deleted and the change can always be reverted.
 - Parameter editor for BepInEx `.cfg` files (bool / number / text / dropdown),
   with an automatic `.cfg.bak` backup before the first edit.
+- Hotkey conflict check: when you save a `KeyboardShortcut` parameter, the new
+  key is compared against every shortcut already bound in `BepInEx\config\*.cfg`
+  – both other mods and other parameters of the same mod. A dialog lists the
+  clashes and asks whether to save anyway. Configs left behind by uninstalled
+  plugins are ignored, so they never trigger false warnings.
 - One-click BepInEx install: downloads the official x64 release from GitHub and
   extracts it into the game folder.
 - 12 UI languages.

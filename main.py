@@ -85,8 +85,209 @@ def _cfg_range(text):
     return None
 
 
+# ---------- 快捷键（KeyboardShortcut）冲突检测 ----------
+# BepInEx 把 KeyboardShortcut 序列化成 "F1 + LeftShift"（主键在前，修饰键在后，
+# 以「空格 + 空格」连接）。cfg 里同时有 "# Setting type: KeyboardShortcut" 标注。
+_HK_ALIAS = {
+    "shift": "leftshift", "lshift": "leftshift",
+    "control": "leftctrl", "ctrl": "leftctrl", "lctrl": "leftctrl",
+    "alt": "leftalt", "lalt": "leftalt",
+    "win": "leftcmd", "super": "leftcmd", "meta": "leftcmd",
+    "esc": "escape",
+}
+_HK_NONE = ("", "none", "null")
+
+
+def parse_hotkey(value):
+    """把 cfg 里的快捷键值解析成规范化集合，用于比较。
+    空值 / None 返回 None（表示未绑定）。"""
+    raw = (value or "").strip().replace("＋", "+")
+    if raw.lower() in _HK_NONE:
+        return None
+    toks = []
+    for part in raw.split("+"):
+        k = part.strip().replace(" ", "").replace("_", "").lower()
+        if not k:
+            continue
+        toks.append(_HK_ALIAS.get(k, k))
+    return frozenset(toks) if toks else None
+
+
+def _cfg_plugin_present(cfg_path, plugins_dir):
+    """判断 cfg 对应的插件是否还装着（cfg 可能是已删除插件留下的残留）。
+    先按 GUID（cfg 文件名）在各 dll 里找内嵌字符串，找不到再用文件名模糊匹配。"""
+    if not plugins_dir:
+        return True
+    guid = os.path.splitext(os.path.basename(cfg_path))[0].strip().lower()
+    if not guid:
+        return True
+    needle = guid.encode("utf-16-le")
+    stem = guid.rsplit(".", 1)[-1]
+    try:
+        names = os.listdir(plugins_dir)
+    except Exception:
+        return True          # 读不到插件目录就不做过滤，宁可多提示也别漏
+    dlls = []
+    for n in names:
+        p = os.path.join(plugins_dir, n)
+        if n.lower().endswith(".dll"):
+            dlls.append(p)
+        elif os.path.isdir(p):
+            try:
+                for fn in os.listdir(p):
+                    if fn.lower().endswith(".dll"):
+                        dlls.append(os.path.join(p, fn))
+            except Exception:
+                pass
+    for d in dlls:
+        try:
+            with open(d, "rb") as f:
+                blob = f.read().lower()
+            if needle in blob:
+                return True
+        except Exception:
+            continue
+    for n in names:                       # 兜底：文件名相似（兼容 guid 被混淆的插件）
+        base = os.path.splitext(n)[0].lower()
+        if stem and (stem in base or base in stem):
+            return True
+    return False
+
+
+def scan_hotkeys(config_dir, plugins_dir=None):
+    """扫描目录下全部 cfg，返回 [(cfg_path, key, section, value)]，只取
+    KeyboardShortcut 类型的条目。已卸载插件留下的 cfg 会被跳过。"""
+    out = []
+    try:
+        names = sorted(os.listdir(config_dir))
+    except Exception:
+        return out
+    for fn in names:
+        low = fn.lower()
+        if not low.endswith(".cfg") or low == "bepinex.cfg":
+            continue
+        path = os.path.join(config_dir, fn)
+        if not os.path.isfile(path):
+            continue
+        if not _cfg_plugin_present(path, plugins_dir):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            continue
+        section = ""
+        is_hk = False
+        for raw in lines:
+            s = raw.strip()
+            if not s:
+                continue
+            if s.startswith("["):
+                section = s.strip("[]").strip()
+                is_hk = False
+                continue
+            if s.startswith("#"):
+                lowc = s.lstrip("#").strip().lower()
+                if lowc.startswith("setting type:"):
+                    is_hk = "keyboardshortcut" in lowc
+                continue
+            if is_hk and "=" in s:
+                k, _, v = s.partition("=")
+                out.append((path, k.strip(), section, v.strip()))
+                is_hk = False
+    return out
+
+
+def find_hotkey_conflicts(config_dir, cfg_path, new_items, mod_name,
+                          name_of=None, label_of=None, plugins_dir=None):
+    """new_items: [(key, label, value)]，只传本次要写入的快捷键项。
+    返回冲突列表 [{label, value, kind, owner}]，kind=other|self。"""
+    new_norms = {}
+    for key, label, val in new_items:
+        norm = parse_hotkey(val)
+        if norm is None:
+            continue
+        new_norms.setdefault(norm, []).append((key, label, val))
+
+    conflicts = []
+    # 1) 本次表单内部两个参数抢同一个键
+    for norm, items in new_norms.items():
+        for key, label, val in items[1:]:
+            conflicts.append({"label": label, "value": val,
+                              "kind": "self", "owner": items[0][1]})
+
+    # 2) 与已写在 cfg 里的快捷键（含其他 mod）冲突
+    editing = {k for k, _, _ in new_items}
+    seen = set()
+    for path, key, section, val in scan_hotkeys(config_dir, plugins_dir):
+        same = os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(cfg_path))
+        if same and key in editing:
+            continue          # 这一项随本次保存被覆盖，不算冲突
+        norm = parse_hotkey(val)
+        if norm is None or norm not in new_norms:
+            continue
+        if same:
+            kind = "self"
+            owner = label_of(key) if label_of else key
+        else:
+            kind = "other"
+            owner = (name_of(path) if name_of else
+                     os.path.splitext(os.path.basename(path))[0]) + " / " + key
+        for k, label, v in new_norms[norm]:
+            sig = (label, v, owner)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            conflicts.append({"label": label, "value": v, "kind": kind, "owner": owner})
+    return conflicts
+
+
+def ask_hotkey_conflict(parent, title, body, ok_text, cancel_text, ok_style=None):
+    """快捷键冲突确认框。返回 True=仍然保存，False=返回修改。"""
+    try:
+        dlg = tk.Toplevel(parent)
+    except Exception:
+        return messagebox.askyesno(title, body, parent=parent)
+    dlg.title(title)
+    dlg.configure(bg="#ffffff")
+    dlg.resizable(False, False)
+    res = {"ok": False}
+    tk.Label(dlg, text=body, justify="left", anchor="w", bg="#ffffff", fg="#333333",
+             font=("Microsoft YaHei UI", 10), wraplength=560).pack(fill="x", padx=18, pady=(16, 12))
+    bar = ttk.Frame(dlg)
+    bar.pack(fill="x", padx=18, pady=(0, 14))
+
+    def _ok():
+        res["ok"] = True
+        dlg.destroy()
+
+    ttk.Button(bar, text=cancel_text, command=dlg.destroy).pack(side="right")
+    if ok_style:
+        ttk.Button(bar, text=ok_text, style=ok_style, command=_ok).pack(side="right", padx=8)
+    else:
+        ttk.Button(bar, text=ok_text, command=_ok).pack(side="right", padx=8)
+    dlg.update_idletasks()
+    try:
+        pw = parent.winfo_toplevel()
+        x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_width()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_height()) // 3
+        dlg.geometry("+%d+%d" % (max(0, x), max(0, y)))
+    except Exception:
+        pass
+    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+    try:
+        dlg.transient(parent.winfo_toplevel())
+        dlg.grab_set()
+    except Exception:
+        pass
+    parent.wait_window(dlg)
+    return res["ok"]
+
+
 def _classify_cfg_type(stype, val, choices):
     t = (stype or "").lower()
+    if "keyboardshortcut" in t:
+        return "hotkey"
     # 有 Acceptable values 时枚举优先：作者可能给布尔类型声明配 A/B/C 之类的命名值，
     # 此时按 bool 渲染会显示不出真实值。先判 choice 才能保证编辑的是作者允许的选项。
     if choices:
@@ -2158,6 +2359,8 @@ class ModManagerApp:
                 extra.append(S["param_tip_choices"].format(list=cstr))
             if desc_txt:
                 pieces.append(S["param_cfg_desc"].format(d=desc_txt))
+            if ptype == "hotkey":
+                extra.append(S["param_tip_hotkey"])
             short = " | ".join(pieces) if pieces else ""
             if extra:
                 tip_full = (tip_full + "\n\n" + "\n".join(extra)) if tip_full else "\n".join(extra)
@@ -2274,6 +2477,35 @@ class ModManagerApp:
             if errors:
                 messagebox.showwarning(S["param_save_warn_title"], "\n".join(errors))
                 return
+            # 快捷键冲突检查：新设置的热键若已被别的参数占用，先弹窗确认
+            hk_items = []
+            for p, ctl in widgets:
+                if p.get("type") != "hotkey":
+                    continue
+                k = p.get("key", "")
+                hk_items.append((k, p.get("label") or k, values.get(k, "")))
+            if hk_items:
+                try:
+                    label_map = {p.get("key"): (p.get("label") or p.get("key")) for p in schema}
+                    conflicts = find_hotkey_conflicts(
+                        self.config_dir, cfg_path, hk_items, display,
+                        name_of=None,
+                        label_of=lambda k: label_map.get(k, k),
+                        plugins_dir=self.plugins_dir)
+                except Exception as e:
+                    log_exc(e)
+                    conflicts = []
+                if conflicts:
+                    lines = [S["hk_conflict_intro"], ""]
+                    for c in conflicts:
+                        tmpl = S["hk_conflict_self"] if c["kind"] == "self" else S["hk_conflict_other"]
+                        lines.append("• " + tmpl.format(label=c["label"], value=c["value"], owner=c["owner"]))
+                    lines.append("")
+                    lines.append(S["hk_conflict_ask"])
+                    if not ask_hotkey_conflict(w, S["hk_conflict_title"], "\n".join(lines),
+                                               S["hk_save_anyway"], S["hk_back"],
+                                               ok_style="Primary.TButton"):
+                        return
             # 第3项：首次保存前自动备份原 cfg，供"从备份恢复"回滚
             try:
                 if not os.path.exists(backup_path):
