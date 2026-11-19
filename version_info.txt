@@ -1,0 +1,32 @@
+# UTF-8
+# CafeModManager universal edition - version resource (shown in the exe Properties dialog)
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        u'080404b0',
+        [
+          StringStruct(u'CompanyName', u'LemonK'),
+          StringStruct(u'FileDescription', u'Cafe Business Manager - Mod Manager (Universal)'),
+          StringStruct(u'FileVersion', u'1.0.0.0'),
+          StringStruct(u'InternalName', u'CafeModManager'),
+          StringStruct(u'LegalCopyright', u'\u00a9 LemonK. Free for personal use. Do not resell or redistribute.'),
+          StringStruct(u'OriginalFilename', u'CafeModManager.exe'),
+          StringStruct(u'ProductName', u'Cafe Business Manager - Mod Manager'),
+          StringStruct(u'ProductVersion', u'1.0.0.0')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct(u'Translation', [2052, 1200])])
+  ]
+)
