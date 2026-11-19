@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller
+build/
+dist/
+*.manifest
+
+# Local runtime state (created on first launch, contains machine-specific paths)
+config.json
+migrations.json
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
